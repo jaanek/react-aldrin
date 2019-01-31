@@ -58,20 +58,18 @@ function isEventListener(propName) {
     return propName.slice(0, 2).toLowerCase() === 'on';
 }
 
-function getMarkupForChildren(children, staticMarkup, selectedValue) {
-    const childrenMarkup = [];
+function renderChildren(adapter, parent, children, staticMarkup, selectedValue) {
     for (let i = 0, l = children.length; i < l; i += 1) {
         const previousWasText = i > 0 && children[i - 1].type === RAW_TEXT_TYPE;
-        childrenMarkup.push(
-            children[i].toString(
-                staticMarkup,
-                previousWasText,
-                undefined,
-                selectedValue
-            )
+        children[i].render(
+            adapter,
+            parent,
+            staticMarkup,
+            previousWasText,
+            undefined,
+            selectedValue
         );
     }
-    return childrenMarkup.join('');
 }
 
 const RESERVED_PROPS = {
@@ -103,8 +101,8 @@ export class SSRTreeNode {
     setAttribute(name, value) {
         this.attributes[name] = value;
     }
-    attributesToString(attributes) {
-        let ret = '';
+    renderAttributes(attributes) {
+        const ret = [];
         for (const key in attributes) {
             if (!attributes.hasOwnProperty(key)) {
                 continue;
@@ -130,80 +128,83 @@ export class SSRTreeNode {
         }
         return ret;
     }
-    toString(staticMarkup, previousWasText, isRoot, selectedValue) {
-        let renderAttributes = this.attributes;
+    render(adapter, parent, staticMarkup, previousWasText, isRoot, selectedValue) {
+        console.log(`render! Adapter: ${adapter}: `, this.type);
+        let finalAttributes = this.attributes;
         let selectSelectedValue;
         let childrenMarkup;
         const rawInnerHtml =
             this.attributes.dangerouslySetInnerHTML &&
             this.attributes.dangerouslySetInnerHTML.__html;
+
+        // check roots
         if (this.type === ROOT_STATIC_TYPE) {
-            let markup = getMarkupForChildren(this.children, staticMarkup);
-            return markup;
+            return renderChildren(adapter, parent, this.children, staticMarkup);
         }
         if (this.type === ROOT_TYPE) {
-            return this.children
-                .map(c => c.toString(staticMarkup, undefined, true))
-                .join('');
+            return this.children.forEach(c => c.render(adapter, parent, staticMarkup, undefined, true));
         }
+
+        // check texts
         if (this.type === RAW_TEXT_TYPE) {
+            let text;
             if (!staticMarkup && previousWasText) {
-                return '<!-- -->' + escapeTextForBrowser(this.text);
+                text = '<!-- -->' + escapeTextForBrowser(this.text);
+            } else {
+                text = escapeTextForBrowser(this.text);
             }
-            return escapeTextForBrowser(this.text);
+            return adapter.insertText(parent, text);
         }
+
+        const element = adapter.createElement(this.type, undefined);
+
         if (this.type === 'input') {
-            if (
-                renderAttributes.defaultValue ||
-                renderAttributes.defaultChecked
-            ) {
-                renderAttributes = Object.assign({}, renderAttributes, {
+            if (finalAttributes.defaultValue || finalAttributes.defaultChecked) {
+                finalAttributes = Object.assign({}, finalAttributes, {
                     value:
-                        renderAttributes.value != null
-                            ? renderAttributes.value
-                            : renderAttributes.defaultValue,
+                        finalAttributes.value != null
+                            ? finalAttributes.value
+                            : finalAttributes.defaultValue,
                     defaultValue: undefined,
                     checked:
-                        renderAttributes.Checked != null
-                            ? renderAttributes.Checked
-                            : renderAttributes.defaultChecked,
+                        finalAttributes.Checked != null
+                            ? finalAttributes.Checked
+                            : finalAttributes.defaultChecked,
                     defaultChecked: undefined
                 });
             }
         } else if (this.type === 'select') {
-            if (renderAttributes.value || renderAttributes.defaultValue) {
-                selectSelectedValue =
-                    renderAttributes.value || renderAttributes.defaultValue;
-                renderAttributes = Object.assign({}, renderAttributes, {
+            if (finalAttributes.value || finalAttributes.defaultValue) {
+                selectSelectedValue = finalAttributes.value || finalAttributes.defaultValue;
+                finalAttributes = Object.assign({}, finalAttributes, {
                     value: undefined,
                     defaultValue: undefined
                 });
             }
         } else if (this.type === 'textarea') {
-            if (renderAttributes.value || renderAttributes.defaultValue) {
+            if (finalAttributes.value || finalAttributes.defaultValue) {
                 this.appendChild(
                     new SSRTreeNode(
                         RAW_TEXT_TYPE,
-                        renderAttributes.value || renderAttributes.defaultValue
+                        finalAttributes.value || finalAttributes.defaultValue
                     )
                 );
-                renderAttributes = Object.assign({}, renderAttributes, {
+                finalAttributes = Object.assign({}, finalAttributes, {
                     value: undefined,
                     defaultValue: undefined
                 });
             }
         } else if (this.type === 'option') {
-            childrenMarkup = getMarkupForChildren(
+            renderChildren(
+                adapter,
+                parent,
                 this.children,
                 staticMarkup,
                 selectSelectedValue
             );
             let selected = null;
             if (selectedValue != null) {
-                let value =
-                    renderAttributes.value != null
-                        ? renderAttributes.value
-                        : childrenMarkup;
+                let value = finalAttributes.value != null ? finalAttributes.value : undefined;
                 if (Array.isArray(selectedValue)) {
                     for (let i = 0; i < selectedValue.length; i++) {
                         if (selectedValue[i] === value) {
@@ -214,233 +215,268 @@ export class SSRTreeNode {
                 } else {
                     selected = selectedValue === value;
                 }
-                renderAttributes = Object.assign(
-                    {},
-                    {
-                        selected
-                    },
-                    renderAttributes
-                );
+                finalAttributes = Object.assign({}, { selected }, finalAttributes);
             }
         }
 
-        const selfClose = !this.children.length && omittedCloseTags[this.type];
-        const startTag = `<${this.type}${this.attributesToString(
-            renderAttributes
-        )}${isRoot ? ' data-reactroot=""' : ''}${selfClose ? '/>' : '>'}`;
-        childrenMarkup =
-            rawInnerHtml ||
-            childrenMarkup ||
-            getMarkupForChildren(
-                this.children,
-                staticMarkup,
-                selectSelectedValue
-            );
-        const endTag = selfClose ? '' : `</${this.type}>`;
-        return startTag + childrenMarkup + endTag;
-    }
-}
+        // apply attributes
+        // adapter.adoptAttributes(element, bodyAttrs);
+        if (isRoot) {
+            // adapter.adoptAttributes(element, [
+            //     {name: 'data-reactroot', value: ''},
+            // ]);
+        }
 
-const hostConfig = {
-    getRootHostContext(rootInstance) {
-        return emptyObject;
-    },
-    getChildHostContext(parentHostContext, type) {
-        return emptyObject;
-    },
+        if (rawInnerHtml) {
+            return adapter.insertText(element, rawInnerHtml);
+        }
 
-    // Useful only for testing
-    getPublicInstance(inst) {
-        return inst;
-    },
+        // append current element to the parent
+        adapter.appendChild(parent, element);
 
-    // Create the DOMElement, but attributes are set in `finalizeInitialChildren`
-    createInstance(
-        type,
-        props,
-        rootContainerInstance,
-        hostContext,
-        internalInstanceHandle
-    ) {
-        return new SSRTreeNode(type);
-    },
-
-    // appendChild for direct children
-    appendInitialChild(parentInstance, child) {
-        parentInstance.appendChild(child);
-    },
-
-    // Actually set the attributes and text content to the domElement and check if
-    // it needs focus, which will be eventually set in `commitMount`
-    finalizeInitialChildren(element, type, props) {
-        Object.keys(props).forEach(propName => {
-            const propValue = props[propName];
-
-            if (propName === 'children') {
-                if (
-                    typeof propValue === 'string' ||
-                    typeof propValue === 'number'
-                ) {
-                    element.appendChild(
-                        new SSRTreeNode(RAW_TEXT_TYPE, propValue)
-                    );
-                }
-            } else if (propName === 'className') {
-                element.setAttribute('class', propValue);
-            } else if (!isEventListener(propName)) {
-                element.setAttribute(propName, propValue);
-            }
-        });
-        return false;
-    },
-
-    // Calculate the updatePayload
-    prepareUpdate(domElement, type, oldProps, newProps) {},
-
-    shouldSetTextContent(type, props) {
-        return (
-            type === 'textarea' ||
-            typeof props.children === 'string' ||
-            typeof props.children === 'number'
+        // render current element children
+        renderChildren(
+            adapter,
+            element,
+            this.children,
+            staticMarkup,
+            selectSelectedValue
         );
-    },
-    shouldDeprioritizeSubtree(type, props) {},
-    createTextInstance(
-        text,
-        rootContainerInstance,
-        hostContext,
-        internalInstanceHandle
-    ) {
-        return new SSRTreeNode(RAW_TEXT_TYPE, text);
-    },
-    scheduleDeferredCallback: ReactScheduler.unstable_scheduleCallback,
-    cancelDeferredCallback: ReactScheduler.unstable_cancelCallback,
-    shouldYield: ReactScheduler.unstable_shouldYield,
 
-    scheduleTimeout: setTimeout,
-    cancelTimeout: clearTimeout,
-
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
-
-    noTimeout: -1,
-
-    // Commit hooks, useful mainly for react-dom syntethic events
-    prepareForCommit() {},
-    resetAfterCommit() {},
-
-    now: ReactScheduler.unstable_now,
-    isPrimaryRenderer: true,
-    //useSyncScheduling: true,
-
-    supportsMutation: true,
-    commitUpdate(
-        domElement,
-        updatePayload,
-        type,
-        oldProps,
-        newProps,
-        internalInstanceHandle
-    ) {},
-    commitMount(domElement, type, newProps, internalInstanceHandle) {},
-    commitTextUpdate(textInstance, oldText, newText) {
-        textInstance.setText(newText);
-    },
-    resetTextContent(textInstance) {
-        textInstance.setText('');
-    },
-    appendChild(parentInstance, child) {
-        parentInstance.appendChild(child);
-    },
-
-    // appendChild to root container
-    appendChildToContainer(parentInstance, child) {
-        parentInstance.appendChild(child);
-    },
-    insertBefore(parentInstance, child, beforeChild) {
-        parentInstance.insertBefore(child, beforeChild);
-    },
-    insertInContainerBefore(parentInstance, child, beforeChild) {
-        parentInstance.insertBefore(child, beforeChild);
-    },
-    removeChild(parentInstance, child) {
-        parentInstance.removeChild(child);
-    },
-    removeChildFromContainer(parentInstance, child) {
-        parentInstance.removeChild(child);
-    },
-
-    // These are todo and not well understood on the server
-    hideInstance() {},
-    hideTextInstance() {},
-    unhideInstance() {},
-    unhideTextInstance() {}
-};
-
-const SSRRenderer = Reconciler(hostConfig);
-
-function ReactRoot({ staticMarkup = false } = {}) {
-    const rootType = staticMarkup ? ROOT_STATIC_TYPE : ROOT_TYPE;
-    const ssrTreeRootNode = new SSRTreeNode(rootType);
-    this._internalTreeRoot = ssrTreeRootNode;
-    const root = SSRRenderer.createContainer(ssrTreeRootNode, true);
-    this._internalRoot = root;
-    this._staticMarkup = staticMarkup;
+        // const selfClose = !this.children.length && omittedCloseTags[this.type];
+        // const startTag = `<${this.type}${this.renderAttributes(
+        //     finalAttributes
+        // )}${isRoot ? ' data-reactroot=""' : ''}${selfClose ? '/>' : '>'}`;
+        // childrenMarkup =
+        //     rawInnerHtml ||
+        //     childrenMarkup ||
+        //     renderChildren(
+        //         this.children,
+        //         staticMarkup,
+        //         selectSelectedValue
+        //     );
+        // const endTag = selfClose ? '' : `</${this.type}>`;
+        // return startTag + childrenMarkup + endTag;
+    }
 }
-ReactRoot.prototype.render = function(children) {
-    const root = this._internalRoot;
-    const work = new ReactWork(this._internalTreeRoot, {
-        staticMarkup: this._staticMarkup
-    });
-    SSRRenderer.updateContainer(children, root, null, work._onCommit);
-    return work;
-};
-ReactRoot.prototype.unmount = function() {
-    const root = this._internalRoot;
-    const work = new ReactWork(this._internalTreeRoot);
-    callback = callback === undefined ? null : callback;
-    SSRRenderer.updateContainer(null, root, null, work._onCommit);
-    return work;
-};
 
-function ReactWork(root, { staticMarkup = false } = {}) {
-    this._callbacks = null;
-    this._didCommit = false;
-    // TODO: Avoid need to bind by replacing callbacks in the update queue with
-    // list of Work objects.
-    this._onCommit = this._onCommit.bind(this);
-    this._internalRoot = root;
-    this._staticMarkup = staticMarkup;
+function createHostConfig() {
+    return {
+        getRootHostContext(rootInstance) {
+            return emptyObject;
+        },
+
+        getChildHostContext(parentHostContext, type) {
+            return emptyObject;
+        },
+
+        // Useful only for testing
+        getPublicInstance(inst) {
+            return inst;
+        },
+
+        // Create the DOMElement, but attributes are set in `finalizeInitialChildren`
+        createInstance(
+            type,
+            props,
+            rootContainerInstance,
+            hostContext,
+            internalInstanceHandle
+        ) {
+            return new SSRTreeNode(type);
+        },
+
+        // appendChild for direct children
+        appendInitialChild(parentInstance, child) {
+            parentInstance.appendChild(child);
+        },
+
+        // Actually set the attributes and text content to the domElement and check if
+        // it needs focus, which will be eventually set in `commitMount`
+        finalizeInitialChildren(element, type, props) {
+            Object.keys(props).forEach(propName => {
+                const propValue = props[propName];
+
+                if (propName === 'children') {
+                    if (
+                        typeof propValue === 'string' ||
+                            typeof propValue === 'number'
+                    ) {
+                        element.appendChild(
+                            new SSRTreeNode(RAW_TEXT_TYPE, propValue)
+                        );
+                    }
+                } else if (propName === 'className') {
+                    element.setAttribute('class', propValue);
+                } else if (!isEventListener(propName)) {
+                    element.setAttribute(propName, propValue);
+                }
+            });
+            return false;
+        },
+
+        // Calculate the updatePayload
+        prepareUpdate(domElement, type, oldProps, newProps) {},
+
+        shouldSetTextContent(type, props) {
+            return (
+                type === 'textarea' ||
+                    typeof props.children === 'string' ||
+                    typeof props.children === 'number'
+            );
+        },
+        shouldDeprioritizeSubtree(type, props) {},
+        createTextInstance(
+            text,
+            rootContainerInstance,
+            hostContext,
+            internalInstanceHandle
+        ) {
+            return new SSRTreeNode(RAW_TEXT_TYPE, text);
+        },
+        scheduleDeferredCallback: ReactScheduler.unstable_scheduleCallback,
+        cancelDeferredCallback: ReactScheduler.unstable_cancelCallback,
+        shouldYield: ReactScheduler.unstable_shouldYield,
+
+        scheduleTimeout: setTimeout,
+        cancelTimeout: clearTimeout,
+
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout,
+
+        noTimeout: -1,
+
+        // Commit hooks, useful mainly for react-dom syntethic events
+        prepareForCommit() {},
+        resetAfterCommit() {},
+
+        now: ReactScheduler.unstable_now,
+        isPrimaryRenderer: true,
+        //useSyncScheduling: true,
+
+        supportsMutation: true,
+        commitUpdate(
+            domElement,
+            updatePayload,
+            type,
+            oldProps,
+            newProps,
+            internalInstanceHandle
+        ) {},
+        commitMount(domElement, type, newProps, internalInstanceHandle) {},
+        commitTextUpdate(textInstance, oldText, newText) {
+            textInstance.setText(newText);
+        },
+        resetTextContent(textInstance) {
+            textInstance.setText('');
+        },
+        appendChild(parentInstance, child) {
+            parentInstance.appendChild(child);
+        },
+
+        // appendChild to root container
+        appendChildToContainer(parentInstance, child) {
+            parentInstance.appendChild(child);
+        },
+        insertBefore(parentInstance, child, beforeChild) {
+            parentInstance.insertBefore(child, beforeChild);
+        },
+        insertInContainerBefore(parentInstance, child, beforeChild) {
+            parentInstance.insertBefore(child, beforeChild);
+        },
+        removeChild(parentInstance, child) {
+            parentInstance.removeChild(child);
+        },
+        removeChildFromContainer(parentInstance, child) {
+            parentInstance.removeChild(child);
+        },
+
+        // These are todo and not well understood on the server
+        hideInstance() {},
+        hideTextInstance() {},
+        unhideInstance() {},
+        unhideTextInstance() {},
+    };
 }
-ReactWork.prototype.then = function(onCommit) {
-    if (this._didCommit) {
-        onCommit(this._internalRoot.toString(this._staticMarkup));
-        return;
-    }
-    let callbacks = this._callbacks;
-    if (callbacks === null) {
-        callbacks = this._callbacks = [];
-    }
-    callbacks.push(onCommit);
-};
-ReactWork.prototype._onCommit = function() {
-    if (this._didCommit) {
-        return;
-    }
-    this._didCommit = true;
-    const callbacks = this._callbacks;
-    if (callbacks === null) {
-        return;
-    }
-    // TODO: Error handling.
-    for (let i = 0; i < callbacks.length; i++) {
-        const callback = callbacks[i];
-        callback(this._internalRoot.toString(this._staticMarkup));
-    }
-};
 
-function createRoot(options) {
-    return new ReactRoot(options);
+class ReactRoot {
+    constructor(adapter, staticMarkup) {
+        this._adapter = adapter;
+        const rootType = staticMarkup ? ROOT_STATIC_TYPE : ROOT_TYPE;
+        const ssrTreeRootNode = new SSRTreeNode(rootType);
+        this._reconciler = Reconciler(new createHostConfig());
+        this._internalTreeRoot = ssrTreeRootNode;
+        this._internalRoot = this._reconciler.createContainer(ssrTreeRootNode, true);
+        this._staticMarkup = staticMarkup;
+    }
+
+    /**
+     * @param children {ReactNodeList}
+     */
+    render(children) {
+        const root = this._internalRoot;
+        const work = new ReactWork(this._adapter, this._internalTreeRoot, {
+            staticMarkup: this._staticMarkup
+        });
+        this._reconciler.updateContainer(children, root, null, work._onCommit);
+        return work;
+    };
+    unmount() {
+        const root = this._internalRoot;
+        const work = new ReactWork(this._adapter, this._internalTreeRoot);
+        callback = callback === undefined ? null : callback;
+        this._reconciler.updateContainer(null, root, null, work._onCommit);
+        return work;
+    };
+}
+
+class ReactWork {
+    constructor(adapter, internalRoot, { staticMarkup = false } = {}) {
+        this._callbacks = null;
+        this._didCommit = false;
+        // TODO: Avoid need to bind by replacing callbacks in the update queue with
+        // list of Work objects.
+        this._onCommit = this._onCommit.bind(this);
+        this._adapter = adapter;
+        this._internalRoot = internalRoot;
+        this._staticMarkup = staticMarkup;
+    }
+
+    then(onCommit) {
+        if (this._didCommit) {
+            const rootElement = this._adapter.createDocumentFragment();
+            this._internalRoot.render(this._adapter, rootElement, this._staticMarkup);
+            onCommit(rootElement);
+            return;
+        }
+        let callbacks = this._callbacks;
+        if (callbacks === null) {
+            callbacks = this._callbacks = [];
+        }
+        callbacks.push(onCommit);
+    };
+
+    _onCommit() {
+        if (this._didCommit) {
+            return;
+        }
+        this._didCommit = true;
+        const callbacks = this._callbacks;
+        if (callbacks === null) {
+            return;
+        }
+        // TODO: Error handling.
+        for (let i = 0; i < callbacks.length; i++) {
+            const callback = callbacks[i];
+            const rootElement = this._adapter.createDocumentFragment();
+            this._internalRoot.render(this._adapter, rootElement, this._staticMarkup);
+            callback(rootElement);
+        }
+    };
+}
+
+function createRoot(adapter, { staticMarkup = false } = {}) {
+    return new ReactRoot(adapter, staticMarkup);
 }
 
 export function renderToString(element) {
@@ -482,7 +518,33 @@ export function renderToStaticMarkup(element) {
     });
 }
 
+/**
+ * @param adapter {TreeAdapter}
+ * @param element {ReactElement}
+ */
+export function renderWithTreeAdapter(adapter, element) {
+    return new Promise((resolve, reject) => {
+        const root = createRoot(adapter);
+        const cache = createCache();
+        return root
+            .render(
+                <DispatcherModifier>
+                    <PrimaryCacheContext.Provider value={cache}>
+                        {element}
+                    </PrimaryCacheContext.Provider>
+                </DispatcherModifier>
+            )
+            .then(node => {
+                // const cacheData = cache.serialize();
+                // const innerHTML = `window.__REACT_CACHE_DATA__ = ${cacheData};`;
+                // const markupWithCacheData = `${markup}<script id="react_cache_data_container">${innerHTML}</script>`;
+                resolve({ node, cache });
+            });
+    });
+}
+
 export default {
     renderToString,
-    renderToStaticMarkup
+    renderToStaticMarkup,
+    renderWithTreeAdapter
 };
