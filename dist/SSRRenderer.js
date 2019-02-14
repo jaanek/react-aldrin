@@ -133,32 +133,40 @@ class SSRTreeNode {
     setAttribute(name, value) {
         this.attributes[name] = value;
     }
+    renderAttribute(name, value) {
+        return { name: name, value: value };
+    }
     renderAttributes(attributes) {
-        const ret = [];
+        // const ret = [];
+        const attrs = [];
         for (const key in attributes) {
             if (!attributes.hasOwnProperty(key)) {
                 continue;
             }
             let value = attributes[key];
+            console.log(`SSRRenderer renderAttributes! Key: ${key}, value: `, value);
             if (value == null) {
                 continue;
             }
             if (key === 'style') {
                 value = (0, _createMarkupForStyles2.default)(value);
             }
-            let markup = null;
-            if ((0, _isCustomComponent2.default)(this.type.toLowerCase(), attributes)) {
-                if (!RESERVED_PROPS.hasOwnProperty(key)) {
-                    markup = (0, _DOMMarkupOperations.createMarkupForCustomAttribute)(key, value);
-                }
-            } else {
-                markup = (0, _DOMMarkupOperations.createMarkupForProperty)(key, value);
-            }
-            if (markup) {
-                ret += ' ' + markup;
-            }
+
+            attrs.push({ name: key, value: value });
+
+            // let markup = null;
+            // if (isCustomComponent(this.type.toLowerCase(), attributes)) {
+            //     if (!RESERVED_PROPS.hasOwnProperty(key)) {
+            //         markup = createMarkupForCustomAttribute(key, value);
+            //     }
+            // } else {
+            //     markup = createMarkupForProperty(key, value);
+            // }
+            // if (markup) {
+            //     ret += ' ' + markup;
+            // }
         }
-        return ret;
+        return attrs;
     }
     render(adapter, parent, staticMarkup, previousWasText, isRoot, selectedValue) {
         console.log(`render! Adapter: ${adapter}: `, this.type);
@@ -186,7 +194,7 @@ class SSRTreeNode {
             return adapter.insertText(parent, text);
         }
 
-        const element = adapter.createElement(this.type, undefined);
+        const element = adapter.createElement(this.type, undefined, []);
 
         if (this.type === 'input') {
             if (finalAttributes.defaultValue || finalAttributes.defaultChecked) {
@@ -233,11 +241,9 @@ class SSRTreeNode {
         }
 
         // apply attributes
-        // adapter.adoptAttributes(element, bodyAttrs);
+        adapter.adoptAttributes(element, this.renderAttributes(finalAttributes));
         if (isRoot) {
-            // adapter.adoptAttributes(element, [
-            //     {name: 'data-reactroot', value: ''},
-            // ]);
+            adapter.adoptAttributes(element, [{ name: 'data-reactroot', value: '' }]);
         }
 
         if (rawInnerHtml) {
@@ -247,7 +253,7 @@ class SSRTreeNode {
         // append current element to the parent
         adapter.appendChild(parent, element);
 
-        // render current element children
+        // render children into current element
         renderChildren(adapter, element, this.children, staticMarkup, selectSelectedValue);
 
         // const selfClose = !this.children.length && omittedCloseTags[this.type];

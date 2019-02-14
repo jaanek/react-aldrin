@@ -5,7 +5,10 @@ import path from 'path';
 import React from 'react';
 import express from 'express';
 
-import { renderToString } from '../../src/renderer';
+import parse5 from 'parse5';
+import parse5DefAdapter from 'parse5/lib/tree-adapters/default';
+
+import { renderWithTreeAdapter } from '../../src/renderer';
 import { App } from './src';
 
 const app = express();
@@ -38,9 +41,13 @@ app.get('/api/colors/:colorId', (req, res) => {
 });
 
 app.get('/', async (req, res) => {
-    const { markup, markupWithCacheData, cache } = await renderToString(
-        <App />
-    );
+    // const { markup, markupWithCacheData, cache } = await renderToString(<App />);
+    const {node, cache} = await renderWithTreeAdapter(parse5DefAdapter, <App />);
+    console.log(`Example node: `, node);
+    const markup =  parse5.serialize(node);
+    const cacheData = cache.serialize();
+    const innerHTML = `window.__REACT_CACHE_DATA__ = ${cacheData};`;
+    const markupWithCacheData = `${markup}<script id="react_cache_data_container">${innerHTML}</script>`;
     res.send(createHtml(markupWithCacheData));
 });
 
