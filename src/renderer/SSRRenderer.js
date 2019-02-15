@@ -120,7 +120,10 @@ export class SSRTreeNode {
                 value = createMarkupForStyles(value);
             }
 
-            attrs.push({name: key, value: value});
+            // TODO! Currently supports only string attribute values
+            if (typeof value === 'string') {
+                attrs.push({name: key, value: value});
+            }
 
             // let markup = null;
             // if (isCustomComponent(this.type.toLowerCase(), attributes)) {
@@ -235,12 +238,12 @@ export class SSRTreeNode {
             ]);
         }
 
+        // append current element to the parent
+        adapter.appendChild(parent, element);
+
         if (rawInnerHtml) {
             return adapter.insertText(element, rawInnerHtml);
         }
-
-        // append current element to the parent
-        adapter.appendChild(parent, element);
 
         // render children into current element
         renderChildren(
