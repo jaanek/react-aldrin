@@ -407,6 +407,10 @@ function createHostConfig() {
         hideTextInstance() {},
         unhideInstance() {},
         unhideTextInstance() {},
+
+        //
+        schedulePassiveEffects: ReactScheduler.unstable_scheduleCallback,
+        cancelPassiveEffects: ReactScheduler.unstable_cancelCallback,
     };
 }
 

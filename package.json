@@ -1,6 +1,6 @@
 {
   "name": "jaanek-react-aldrin",
-  "version": "0.3.5",
+  "version": "0.3.8",
   "description": "An experimental React Suspense serverside renderer",
   "author": "Fredrik Höglund",
   "license": "MIT",
