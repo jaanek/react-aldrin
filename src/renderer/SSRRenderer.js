@@ -242,7 +242,22 @@ export class SSRTreeNode {
         adapter.appendChild(parent, element);
 
         if (rawInnerHtml) {
-            return adapter.insertText(element, rawInnerHtml);
+            if (adapter.parseFragment) {
+                const result = adapter.parseFragment(rawInnerHtml);
+                const fragment = result[0];
+                const error = result[1];
+                if (fragment && fragment.childNodes) {
+                    for (let i=0; i < fragment.childNodes.length; i++) {
+                        const childNode = fragment.childNodes[i];
+                        adapter.appendChild(element, childNode);
+                    }
+                } else if (error) {
+                    adapter.insertText(element, error);
+                }
+            } else {
+                adapter.insertText(element, rawInnerHtml);
+            }
+            return undefined;
         }
 
         // render children into current element
@@ -254,20 +269,7 @@ export class SSRTreeNode {
             selectSelectedValue
         );
 
-        // const selfClose = !this.children.length && omittedCloseTags[this.type];
-        // const startTag = `<${this.type}${this.renderAttributes(
-        //     finalAttributes
-        // )}${isRoot ? ' data-reactroot=""' : ''}${selfClose ? '/>' : '>'}`;
-        // childrenMarkup =
-        //     rawInnerHtml ||
-        //     childrenMarkup ||
-        //     renderChildren(
-        //         this.children,
-        //         staticMarkup,
-        //         selectSelectedValue
-        //     );
-        // const endTag = selfClose ? '' : `</${this.type}>`;
-        // return startTag + childrenMarkup + endTag;
+        return undefined;
     }
 }
 
